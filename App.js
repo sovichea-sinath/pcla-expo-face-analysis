@@ -2,14 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity } from 'react-native';
 import { Camera } from 'expo-camera';
 import * as FaceDetector from 'expo-face-detector';
+import * as FileSystem from 'expo-file-system';
 import * as tf from '@tensorflow/tfjs';
-import { fetch, decodeJpeg, bundleResourceIO } from '@tensorflow/tfjs-react-native';
+import { decodeJpeg, bundleResourceIO, grayscale_image } from '@tensorflow/tfjs-react-native';
 
 export default function App() {
   // declate the permission state.
   const [hasPermissionState, setHasPermissionState] = useState(null);
-  // TEST state.
-  const [facesState, setFacesState] = useState(null)
+  const [isMountState, setIsMountState] = useState(true)
   // set action when the component is create.
   useEffect(() => {
     (async () => {
@@ -21,9 +21,31 @@ export default function App() {
   // function to handle the camera.
   const handleFaceDetected = async (obj) => {
     if (obj.faces.length > 0) {
-      // take the photo when the face is detected.
-      const photo = await this.camera.takePictureAsync();
-      const { uri } = photo;
+      try {
+        // take the photo when the face is detected.
+        const photo = await this.camera.takePictureAsync();
+        const { uri } = photo;
+        console.log('uri', uri)
+        // so open as base64, turn to raw, then turn to matrix;
+        const imgB64 = await FileSystem.readAsStringAsync(uri, {
+          encoding: FileSystem.EncodingType.Base64
+        });
+        await tf.ready();
+        const imgBuffer = tf.util.encodeString(imgB64, 'base64').buffer;
+        const raw = new Uint8Array(imgBuffer) ;
+        // load.
+        let imageTensor = decodeJpeg(raw);
+        console.log('imageTensor', imageTensor);
+        // resize.
+        imageTensor = tf.image.resizeBilinear(imageTensor, [48, 48])
+        console.log('imageTensorResized', imageTensor)
+        // grayscale. because the fucking library don't have rgb_to_grayscale
+        imageTensor = imageTensor.mean(2).toFloat().expandDims(-1);
+        console.log('imageTensor grayscale', imageTensor);
+      } catch (e) {
+        console.log('an error occur during camera stuff.');
+        setIsMountState(false);
+      }
     }
   }
 
@@ -34,25 +56,33 @@ export default function App() {
   if (hasPermissionState === false) {
     return <Text>No access to camera</Text>;
   }
-  return (
-    <View style={styles.container}>
-      <Camera
-        style={styles.camera}
-        type={Camera.Constants.Type.front}
-        ref={ ref => { this.camera = ref } }
-        onFacesDetected={e => handleFaceDetected(e)}
-        faceDetectorSettings={{
-          mode: FaceDetector.Constants.Mode.accurate,
-          detectLandmarks: FaceDetector.Constants.Landmarks.none,
-          runClassifications: FaceDetector.Constants.Classifications.none,
-          minDetectionInterval: 100,
-          tracking: true,
-        }}
-      >
+  if (isMountState) {
+    return (
+      <View style={styles.container}>
+        <Camera
+          style={styles.camera}
+          type={Camera.Constants.Type.front}
+          ref={ ref => { this.camera = ref } }
+          onFacesDetected={e => handleFaceDetected(e)}
+          faceDetectorSettings={{
+            mode: FaceDetector.Constants.Mode.accurate,
+            detectLandmarks: FaceDetector.Constants.Landmarks.none,
+            runClassifications: FaceDetector.Constants.Classifications.none,
+            minDetectionInterval: 100,
+            tracking: true,
+          }}
+        >
 
-      </Camera>
-    </View>
-  );
+        </Camera>
+      </View>
+    );
+  } else {
+    return (
+      <View>
+        <Text> Camera dismounted! </Text>
+      </View>
+    )
+  }
 }
 
 const styles = StyleSheet.create({
