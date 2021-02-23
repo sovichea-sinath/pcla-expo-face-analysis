@@ -11,3 +11,6 @@ web-build/
 
 # macOS
 .DS_Store
+
+# ignore models
+models
