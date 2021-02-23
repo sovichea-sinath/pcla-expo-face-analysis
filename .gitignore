@@ -14,3 +14,4 @@ web-build/
 
 # ignore models
 models
+*.zip
