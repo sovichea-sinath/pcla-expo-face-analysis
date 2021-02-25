@@ -4,70 +4,74 @@ import { Camera } from 'expo-camera';
 import * as FaceDetector from 'expo-face-detector';
 import * as FileSystem from 'expo-file-system';
 import * as tf from '@tensorflow/tfjs';
-import { decodeJpeg, cameraWithTensors } from '@tensorflow/tfjs-react-native';
+import * as faceapi from 'face-api.js';
+import * as blazeface from '@tensorflow-models/blazeface';
+import { bundleResourceIO, cameraWithTensors } from '@tensorflow/tfjs-react-native';
+
 
 // declare camera.
 const TensorCamera = cameraWithTensors(Camera);
 export default function App() { 
+  // declare emotion model state.
+  let emotionModel;
+  let faceDetector;
+  // emotion model.
+  const EmotionModel = async () => {
+    const modelJson =  require('./assets/models/emotion_model/model.json');
+    const modelWeights = require('./assets/models/emotion_model/group1-shard1of1.bin');
+    const model = await tf.loadLayersModel(bundleResourceIO(modelJson, modelWeights));
+    return model;
+  };
   // on mount.
   useEffect(() => {
     (async () => {
+      // ready tf.
       await tf.ready();
+      console.log('tf is ready')
+      // set the emotion model.
+      emotionModel = await EmotionModel();
+      faceDetector = await blazeface.load();
+      console.log('model loaded')
     })();
-  }, []);
-  // isFaces state.
-  const [facesObj, setFacesObj] = useState({faces: [], image: {}});
-  // handle face detection.
-  const handleFaceDetected = (obj) => {
-    console.log('face detected') 
-    setFacesObj(obj)
-  }
-  // handle the stream of images.
-  const handleStream = (images) => {
+  });
+  const handleStream =  (images) => {
     const loop = async () => {
       // get each frame 
-      console.log(images.next())
       const imageTensor = images.next().value
       // check if the tensor is undefine and it detect faces.
-      console.log(facesObj.faces.length)
-      if (imageTensor !== undefined && facesObj.faces.length > 0) {
+      if (imageTensor !== undefined) {
         let currentTensor = imageTensor;
-        // greyscale the image.
-        currentTensor = currentTensor.mean(2).toFloat().expandDims(-1);
-      }
+        // see if the imageTensor is existed.
+        if (currentTensor && faceDetector) {
+          // get the face from the image.
+          let faces = await faceDetector.estimateFaces(currentTensor, false)
+          // crop the faces.
+          const facesTensors = faces.map(face => {
+            return tf.image.cropAndResize(
+              currentTensor.reshape([1,256,256,3]),
+              [[face.topLeft[1]/256, face.topLeft[0]/256, face.bottomRight[1]/256, face.bottomRight[0]/256]],
+              [faces.length],
+              [48, 48],
+              'bilinear'
+            )
+          })
+          console.log('facesTensors', facesTensors)
 
+          if (facesTensors.length > 0 && emotionModel) {
+            const predictions = facesTensors.map(faceTensor => {
+              // greyscale the image.
+              // faceTensor = faceTensor.reshape([48, 48, 3]).mean(2).expandDims(2);
+              // call the emotion
+              return emotionModel.predict(faceTensor);
+            });
+            console.log(predictions)
+          }
+        }
+      }
 
       requestAnimationFrame(loop);
     }
     loop();
-
-    // if (obj.faces.length > 0) {
-    //   try {
-    //     // take the photo when the face is detected.
-    //     const photo = await this.camera.takePictureAsync();
-    //     const { uri } = photo;
-    //     console.log('uri', uri)
-    //     // so open as base64, turn to raw, then turn to matrix;
-    //     const imgB64 = await FileSystem.readAsStringAsync(uri, {
-    //       encoding: FileSystem.EncodingType.Base64
-    //     });
-    //     await tf.ready();
-    //     const imgBuffer = tf.util.encodeString(imgB64, 'base64').buffer;
-    //     const raw = new Uint8Array(imgBuffer) ;
-    //     // load.
-    //     let imageTensor = decodeJpeg(raw);
-    //     console.log('imageTensor', imageTensor);
-    //     // resize.
-    //     imageTensor = tf.image.resizeBilinear(imageTensor, [48, 48])
-    //     console.log('imageTensorResized', imageTensor)
-    //     // grayscale. because the fucking library don't have rgb_to_grayscale
-    //     imageTensor = imageTensor.mean(2).toFloat().expandDims(-1);
-    //     console.log('imageTensor grayscale', imageTensor);
-    //   } catch (e) {
-    //     console.log('an error occur during camera stuff.');
-    //     setIsMountState(false);
-    //   }
-    // }
   }
   // set camera dimension.
   const textureDims = Platform.OS === 'ios' ?
@@ -87,17 +91,9 @@ export default function App() {
         // Tensor related props
         cameraTextureHeight={textureDims.height}
         cameraTextureWidth={textureDims.width}
-        resizeHeight={48}
-        resizeWidth={48}
+        resizeHeight={256}
+        resizeWidth={256}
         resizeDepth={3}
-        // onFacesDetected={handleFaceDetected}
-        // faceDetectorSettings={{
-        //   mode: FaceDetector.Constants.Mode.accuate,
-        //   detectLandmarks: FaceDetector.Constants.Landmarks.none,
-        //   runClassifications: FaceDetector.Constants.Classifications.none,
-        //   minDetectionInterval: 100,
-        //   tracking: false,
-        // }}
         onReady={handleStream}
         autorender={true}
       />
