@@ -1,10 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity } from 'react-native';
 import { Camera } from 'expo-camera';
-import * as FaceDetector from 'expo-face-detector';
-import * as FileSystem from 'expo-file-system';
 import * as tf from '@tensorflow/tfjs';
-import * as faceapi from 'face-api.js';
 import * as blazeface from '@tensorflow-models/blazeface';
 import { bundleResourceIO, cameraWithTensors } from '@tensorflow/tfjs-react-native';
 
@@ -15,11 +12,12 @@ export default function App() {
   // declare emotion model state.
   let emotionModel;
   let faceDetector;
+  const emotionTypes = ['angry', 'disgust', 'fear', 'happy', 'sad', 'surprise', 'neutral'];
   // emotion model.
   const EmotionModel = async () => {
-    const modelJson =  require('./assets/models/emotion_model/model.json');
-    const modelWeights = require('./assets/models/emotion_model/group1-shard1of1.bin');
-    const model = await tf.loadLayersModel(bundleResourceIO(modelJson, modelWeights));
+    const modelJson =  require('./assets/models/emotion-large.json');
+    const modelWeights = require('./assets/models/emotion-large.bin');
+    const model = await tf.loadGraphModel(bundleResourceIO(modelJson, modelWeights));
     return model;
   };
   // on mount.
@@ -27,14 +25,12 @@ export default function App() {
     (async () => {
       // ready tf.
       await tf.ready();
-      console.log('tf is ready')
       // set the emotion model.
       emotionModel = await EmotionModel();
       faceDetector = await blazeface.load();
-      console.log('model loaded')
     })();
   });
-  const handleStream =  (images) => {
+  const handleStream =  (images, updateCameraPreview, gl) => {
     const loop = async () => {
       // get each frame 
       const imageTensor = images.next().value
@@ -42,35 +38,77 @@ export default function App() {
       if (imageTensor !== undefined) {
         let currentTensor = imageTensor;
         // see if the imageTensor is existed.
-        if (currentTensor && faceDetector) {
+        if (currentTensor && faceDetector && emotionModel) {
           // get the face from the image.
           let faces = await faceDetector.estimateFaces(currentTensor, false)
           // crop the faces.
           const facesTensors = faces.map(face => {
             return tf.image.cropAndResize(
-              currentTensor.reshape([1,256,256,3]),
-              [[face.topLeft[1]/256, face.topLeft[0]/256, face.bottomRight[1]/256, face.bottomRight[0]/256]],
+              currentTensor.reshape([1, currentTensor.shape[0], currentTensor.shape[1], currentTensor.shape[2]]),
+              [[
+                face.topLeft[1] * currentTensor.shape[1], // y * width
+                face.topLeft[0] * currentTensor.shape[0],
+                face.bottomRight[1] * currentTensor.shape[1],
+                face.bottomRight[0] * currentTensor.shape[0]
+              ]],
               [faces.length],
-              [48, 48],
+              [64, 64],
               'bilinear'
             )
+          }).map(face => {
+            // grayscale the image.
+            // the vector to normalize the channel in the order [red, green, blue].
+            const grayMatrix = [0.2989, 0.5870, 0.1140];
+            // devide the face into 3 differnce color channel.
+            const [red, green, blue] = tf.split(face, 3, 3);
+            face.dispose();
+            // normalize the channels with the gray matrix.
+            const redNorm = tf.mul(red, grayMatrix[0]);
+            const greenNorm = tf.mul(green, grayMatrix[1]);
+            const blueNorm = tf.mul(blue, grayMatrix[2]);
+            // dispose the normal channels.
+            red.dispose();
+            green.dispose();
+            blue.dispose();
+            // merge the new channel to a new grayFace.
+            const grayFace = tf.tidy(() => {
+              return tf.addN([redNorm, greenNorm, blueNorm]).sub(0.5).mul(2);
+            })
+            // dispose each individual channels.
+            redNorm.dispose();
+            greenNorm.dispose();
+            blueNorm.dispose();
+            // return the matrix;
+            return grayFace;
           })
           console.log('facesTensors', facesTensors)
 
           if (facesTensors.length > 0 && emotionModel) {
-            const predictions = facesTensors.map(faceTensor => {
-              // greyscale the image.
-              // faceTensor = faceTensor.reshape([48, 48, 3]).mean(2).expandDims(2);
-              // call the emotion
-              return emotionModel.predict(faceTensor);
+            // only return the text prdiction with it persentage.
+            const emotionPredictions = facesTensors.map(faceTensor => {
+              // call the emotion prediction and get it data.
+              const emotionProb = emotionModel
+                .predict(faceTensor)
+                .dataSync()
+              ;
+              // return the percentage and and it type.
+              const maxProp = Math.max(...emotionProb);
+              console.log('maxProp', maxProp)
+              return {
+                emotion: emotionTypes[emotionProb.indexOf(maxProp)],
+                percentage: maxProp
+              }
             });
-            console.log(predictions)
+            console.log(emotionPredictions)
           }
         }
       }
 
+      updateCameraPreview();
+      gl.endFrameEXP();
       requestAnimationFrame(loop);
     }
+
     loop();
   }
   // set camera dimension.
@@ -95,7 +133,7 @@ export default function App() {
         resizeWidth={256}
         resizeDepth={3}
         onReady={handleStream}
-        autorender={true}
+        // autorender={true}
       />
     </View>
   );
