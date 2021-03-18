@@ -24,7 +24,8 @@
     "react-native-fs": "^2.16.6",
     "react-native-get-random-values": "^1.6.0",
     "react-native-web": "~0.13.12",
-    "react-native-webview": "11.0.0"
+    "react-native-webview": "11.0.0",
+    "react-native-svg": "12.1.0"
   },
   "devDependencies": {
     "@babel/core": "~7.9.0"
